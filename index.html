@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LORAN Data Visualization</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        body {
+            font-family: 'Verdana', sans-serif;
+            background-color: #eef2f3;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+
+        #loranPlot {
+            background-color: #fff;
+            border-radius: 12px;
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+            width: 90%;
+            max-width: 900px;
+            height: 500px;
+            margin-bottom: 20px;
+        }
+
+        .form-container {
+            background: #ffffff;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            max-width: 400px;
+            text-align: center;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 10px;
+            font-size: 1rem;
+            font-weight: bold;
+        }
+
+        input {
+            width: 100%;
+            padding: 8px;
+            margin: 6px 0 16px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 1rem;
+        }
+
+        button {
+            background-color: #4CAF50;
+            color: #fff;
+            border: none;
+            padding: 12px 24px;
+            font-size: 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s, transform 0.2s;
+        }
+
+        button:hover {
+            background-color: #45a049;
+            transform: translateY(-2px);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body>
+
+<div id="loranPlot"></div>
+
+<div class="form-container">
+    <label>Object Speed: <input type="number" id="objectSpeed" value="100"></label>
+    <label>Emulation Zone Size: <input type="number" id="zoneSize" value="100"></label>
+    <button onclick="applySettings()">Update Settings</button>
+</div>
+
+<script>
+    const baseStations = {
+        "source_1": { x: 0, y: 0, receivedAt: null },
+        "source_2": { x: 0, y: 100, receivedAt: null },
+        "source_3": { x: 100, y: 0, receivedAt: null }
+    };
+
+    let objectPosition = { x: 50, y: 50 };
+    let objectPositionHistory = [{ x: 50, y: 50 }];
+    let objectSpeed = parseFloat(document.getElementById('objectSpeed').value);
+    let emulationZoneSize = parseFloat(document.getElementById('zoneSize').value);
+
+    const socket = new WebSocket('ws://localhost:4002');
+
+    socket.onopen = () => console.log("Connected to WebSocket");
+    socket.onclose = () => console.log("WebSocket connection closed");
+    socket.onerror = (error) => console.error("WebSocket error:", error);
+
+    socket.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        if (message.sourceId && message.receivedAt) {
+            baseStations[message.sourceId].receivedAt = message.receivedAt;
+
+            if (Object.values(baseStations).every(station => station.receivedAt)) {
+                const [base1, base2, base3] = Object.values(baseStations);
+
+                const delta_t12 = (base1.receivedAt - base2.receivedAt) / 1000;
+                const delta_t13 = (base1.receivedAt - base3.receivedAt) / 1000;
+
+                const position = estimatePosition(base1, base2, base3, delta_t12, delta_t13, 300000);
+                if (position) {
+                    objectPosition = position;
+                    objectPositionHistory.push(position);
+                } else {
+                    console.error("Position estimation failed");
+                }
+
+                updatePlot();
+            }
+        }
+    };
+
+    function estimatePosition(base1, base2, base3, delta_t12, delta_t13, speedOfLight) {
+        const d1 = speedOfLight * delta_t12;
+        const d2 = speedOfLight * delta_t13;
+
+        const A = 2 * (base2.x - base1.x);
+        const B = 2 * (base2.y - base1.y);
+        const C = d1 ** 2 - d2 ** 2 - (base1.x ** 2 - base2.x ** 2) - (base1.y ** 2 - base2.y ** 2);
+
+        const D = 2 * (base3.x - base2.x);
+        const E = 2 * (base3.y - base2.y);
+        const F = d2 ** 2 - d1 ** 2 - (base2.x ** 2 - base3.x ** 2) - (base2.y ** 2 - base3.y ** 2);
+
+        const x = (C * E - F * B) / (E * A - B * D);
+        const y = (C * D - A * F) / (B * D - A * E);
+
+        return isNaN(x) || isNaN(y) ? null : { x, y };
+    }
+
+    function updatePlot() {
+        const baseData = Object.values(baseStations).map((station, index) => ({
+            x: [station.x],
+            y: [station.y],
+            mode: 'markers',
+            type: 'scatter',
+            name: `Station ${index + 1}`,
+            marker: { size: 10, color: '#7a7a7a' }
+        }));
+
+        const objectData = {
+            x: objectPositionHistory.map(pos => pos.x),
+            y: objectPositionHistory.map(pos => pos.y),
+            mode: 'lines+markers',
+            type: 'scatter',
+            name: 'Object Path',
+            marker: { size: 8, color: '#f76c6c' }
+        };
+
+        const data = [...baseData, objectData];
+        Plotly.react('loranPlot', data, {
+            title: 'LORAN Position Estimation',
+            xaxis: { title: 'X Coordinate', range: [0, emulationZoneSize] },
+            yaxis: { title: 'Y Coordinate', range: [0, emulationZoneSize] },
+            showlegend: true
+        });
+    }
+
+    function applySettings() {
+        objectSpeed = parseFloat(document.getElementById('objectSpeed').value);
+        emulationZoneSize = parseFloat(document.getElementById('zoneSize').value);
+
+        axios.post('http://localhost:4002/config', { objectSpeed, emulationZoneSize })
+            .then(() => console.log("Settings updated successfully"))
+            .catch(error => console.error("Error updating settings:", error));
+    }
+
+    updatePlot();
+</script>
+
+</body>
+</html>
