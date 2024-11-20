@@ -43,7 +43,3 @@ The **Least Squares Method** (LSM) is a method used to determine the coordinates
 - Display the coordinates of the base stations and the object in Cartesian coordinates.
 - Use different colors or styles of points to represent the base stations and the object.
 
-# Solution
-
-**User interface of the application:**
-
